@@ -1,7 +1,7 @@
 """Spectral preprocessing pipelines."""
 from __future__ import annotations
 
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Sequence, Tuple, List
 import numpy as np
 from scipy.signal import savgol_filter
 from scipy.ndimage import minimum_filter1d
@@ -25,6 +25,36 @@ def area_norm(y: np.ndarray) -> np.ndarray:
 def moving_avg(y: np.ndarray, n: int) -> np.ndarray:
     c = np.convolve(y, np.ones(n) / n, mode='same')
     return c
+
+
+def sanitize_spectrum(
+    lam: Sequence[float],
+    y: Sequence[float],
+    grid: Sequence[float] | None = None,
+    saturate: float | None = None,
+) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """Clip negatives, handle saturation and interpolate to ``grid``.
+
+    Returns the possibly modified wavelength and intensity arrays along with
+    a list of textual notes describing applied corrections.
+    """
+    notes: List[str] = []
+    lam_arr = np.asarray(lam, dtype=float)
+    y_arr = np.asarray(y, dtype=float)
+    if lam_arr.max() < 100:  # assume data in µm
+        lam_arr = lam_arr * 1000
+        notes.append('lambda scaled from um to nm')
+    if np.any(y_arr < 0):
+        y_arr = np.clip(y_arr, 0, None)
+        notes.append('negative intensities clipped')
+    if saturate is not None and np.any(y_arr > saturate):
+        y_arr = np.clip(y_arr, None, saturate)
+        notes.append('saturation clipping applied')
+    if grid is not None and not np.array_equal(lam_arr, grid):
+        y_arr = np.interp(grid, lam_arr, y_arr)
+        lam_arr = np.asarray(grid, dtype=float)
+        notes.append('interpolated to common grid')
+    return lam_arr, y_arr, notes
 
 
 _OPERATORS = {

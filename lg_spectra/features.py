@@ -7,6 +7,7 @@ from scipy.stats import entropy, skew, kurtosis
 from scipy.fft import dct
 
 from .sticks import Stick
+from .quality import check_warnings
 
 
 BANDS = [(360, 400), (400, 450), (450, 500), (500, 600), (600, 700), (700, 800)]
@@ -37,6 +38,7 @@ def compute_features(lam: np.ndarray, y: np.ndarray, sticks: List[Stick]) -> Dic
     rel = np.array([s.rel_intensity for s in sticks])
     ratios = (rel[1:] / rel[0]) if len(rel) > 1 else np.array([])
     y_norm = y / np.max(y) if np.max(y) else y
+    max_rel = float(rel.max()) if rel.size else 0.0
     feats = {
         'sticks': [s.__dict__ for s in sticks],
         'ratios': ratios.tolist(),
@@ -50,9 +52,10 @@ def compute_features(lam: np.ndarray, y: np.ndarray, sticks: List[Stick]) -> Dic
             'kurt': float(kurtosis(y_norm)),
         },
         'quality': {
-            'snr': float(np.max(rel) / (np.std(y_norm) + 1e-9)),
-            'purity': float(np.max(rel) / (np.sum(rel) + 1e-9)),
+            'snr': float(max_rel / (np.std(y_norm) + 1e-9)),
+            'purity': float(max_rel / (np.sum(rel) + 1e-9)) if rel.size else 0.0,
             'n_sticks': int(len(sticks)),
         },
     }
+    feats['warnings'] = check_warnings(feats, lam=lam, y=y_norm)
     return feats

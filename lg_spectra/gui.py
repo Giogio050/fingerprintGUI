@@ -310,6 +310,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings.setValue('accent', self.accent)
         if self.current_folder:
             self.settings.setValue('last_folder', str(self.current_folder))
+        if getattr(self, 'thread', None) and self.thread.isRunning():
+            self.thread.quit()
+            self.thread.wait()
         super().closeEvent(event)
 
 

@@ -1,4 +1,5 @@
 """Spectral preprocessing pipelines."""
+
 from __future__ import annotations
 
 from typing import Dict, Iterable
@@ -23,20 +24,22 @@ def area_norm(y: np.ndarray) -> np.ndarray:
 
 
 def moving_avg(y: np.ndarray, n: int) -> np.ndarray:
-    c = np.convolve(y, np.ones(n) / n, mode='same')
+    c = np.convolve(y, np.ones(n) / n, mode="same")
     return c
 
 
 _OPERATORS = {
-    'rolling_min': rolling_min,
-    'snv': lambda y: snv(y),
-    'area_norm': lambda y: area_norm(y),
-    'savgol': lambda y, win=7, poly=2: savgol_filter(y, win, poly),
-    'moving_avg': lambda y, n=3: moving_avg(y, n),
+    "rolling_min": rolling_min,
+    "snv": lambda y: snv(y),
+    "area_norm": lambda y: area_norm(y),
+    "savgol": lambda y, win=7, poly=2: savgol_filter(y, win, poly),
+    "moving_avg": lambda y, n=3: moving_avg(y, n),
 }
 
 
-def apply_pipeline(lam: np.ndarray, y: np.ndarray, config: Iterable[Dict]) -> np.ndarray:
+def apply_pipeline(
+    lam: np.ndarray, y: np.ndarray, config: Iterable[Dict]
+) -> np.ndarray:
     """Apply a sequence of preprocessing steps described by ``config``.
 
     Each element in ``config`` is a mapping with key ``op`` specifying
@@ -44,10 +47,10 @@ def apply_pipeline(lam: np.ndarray, y: np.ndarray, config: Iterable[Dict]) -> np
     """
     y_hat = np.asarray(y, dtype=float)
     for step in config:
-        op = step['op']
+        op = step["op"]
         func = _OPERATORS.get(op)
         if func is None:
-            raise ValueError(f'Unknown operator {op}')
-        kwargs = {k: v for k, v in step.items() if k != 'op'}
+            raise ValueError(f"Unknown operator {op}")
+        kwargs = {k: v for k, v in step.items() if k != "op"}
         y_hat = func(y_hat, **kwargs)
     return y_hat

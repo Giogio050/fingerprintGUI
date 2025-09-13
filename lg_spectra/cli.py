@@ -21,9 +21,9 @@ def fp_make(input_folder: Path, out_folder: Path) -> None:
     for lam_file in input_folder.glob('*_lam.npy'):
         lam, spec, meta = load_any(lam_file)
         y = spec[0] if spec.ndim > 1 else spec
-        y_hat = apply_pipeline(lam, y, [{'op': 'snv'}, {'op': 'savgol', 'win': 7, 'poly': 2}])
-        sticks = pick_sticks(lam, y_hat)
-        fp = compute_features(lam, y_hat, sticks)
+        lam2, y_hat, _ = apply_pipeline(lam, y, [{'op': 'snv'}, {'op': 'sg', 'window': 7, 'poly': 2}])
+        sticks = pick_sticks(lam2, y_hat)
+        fp = compute_features(lam2, y_hat, sticks)
         fp['meta'] = meta
         out_path = out_folder / (lam_file.stem.replace('_lam', '') + '.pms.json')
         add_replicate(fp, out_path)

@@ -1,53 +1,136 @@
-"""Spectral preprocessing pipelines."""
+"""Spectral preprocessing pipelines and ensembles."""
 from __future__ import annotations
 
-from typing import Dict, Iterable
+from itertools import product
+from typing import Dict, Iterable, List, Tuple, Callable
+
 import numpy as np
+from scipy import sparse
 from scipy.signal import savgol_filter
-from scipy.ndimage import minimum_filter1d
+from scipy.sparse.linalg import spsolve
 
 
-def rolling_min(y: np.ndarray, win: int) -> np.ndarray:
-    return y - minimum_filter1d(y, size=win)
+def baseline_asls(lam: np.ndarray, y: np.ndarray, lam_s: float = 1e5,
+                  p: float = 0.01, niter: int = 10) -> Tuple[np.ndarray, np.ndarray]:
+    """Asymmetric least squares baseline correction.
+
+    Parameters
+    ----------
+    lam, y:
+        Wavelength axis and spectrum.
+    lam_s:
+        Smoothness parameter :math:`\lambda`.
+    p:
+        Asymmetry parameter.
+    niter:
+        Number of iterations.
+    """
+    L = y.size
+    D = sparse.diags([1, -2, 1], [0, -1, -2], shape=(L - 2, L))
+    w = np.ones(L)
+    for _ in range(niter):
+        W = sparse.spdiags(w, 0, L, L)
+        Z = W + lam_s * D.T @ D
+        z = spsolve(Z, w * y)
+        w = p * (y > z) + (1 - p) * (y <= z)
+    return lam, y - z
 
 
-def snv(y: np.ndarray) -> np.ndarray:
-    y = y - np.mean(y)
-    s = np.std(y)
-    return y / s if s else y
+def snv(lam: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    y0 = y - y.mean()
+    s = y0.std()
+    return lam, (y0 / s if s else y0)
 
 
-def area_norm(y: np.ndarray) -> np.ndarray:
-    area = np.trapz(y)
-    return y / area if area else y
+def sg(lam: np.ndarray, y: np.ndarray, window: int = 7,
+       poly: int = 2) -> Tuple[np.ndarray, np.ndarray]:
+    return lam, savgol_filter(y, window_length=window, polyorder=poly)
 
 
-def moving_avg(y: np.ndarray, n: int) -> np.ndarray:
-    c = np.convolve(y, np.ones(n) / n, mode='same')
-    return c
+def deriv(lam: np.ndarray, y: np.ndarray, order: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+    dy = np.gradient(y, lam)
+    if order == 2:
+        dy = np.gradient(dy, lam)
+    return lam, dy
 
 
-_OPERATORS = {
+def area_norm(lam: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    area = np.trapz(y, lam)
+    return lam, (y / area if area else y)
+
+
+def rolling_min(lam: np.ndarray, y: np.ndarray, width_nm: float = 10.0) -> Tuple[np.ndarray, np.ndarray]:
+    step = np.mean(np.diff(lam)) or 1.0
+    win = max(1, int(round(width_nm / step)))
+    baseline = np.minimum.accumulate(y)
+    baseline = np.minimum(baseline, np.minimum.accumulate(y[::-1])[::-1])
+    from scipy.ndimage import minimum_filter1d
+    baseline = minimum_filter1d(baseline, size=win)
+    return lam, y - baseline
+
+
+def peak_align(lam: np.ndarray, y: np.ndarray, ref: np.ndarray,
+               max_shift_nm: float = 5.0) -> Tuple[np.ndarray, np.ndarray]:
+    step = np.mean(np.diff(lam)) or 1.0
+    max_shift = int(round(max_shift_nm / step))
+    corr = np.correlate(ref, y, mode='full')
+    shift = np.argmax(corr) - (len(y) - 1)
+    shift = int(np.clip(shift, -max_shift, max_shift))
+    lam2 = lam - shift * step
+    y2 = np.roll(y, shift)
+    return lam2, y2
+
+
+Operator = Callable[..., Tuple[np.ndarray, np.ndarray]]
+
+
+_OPERATORS: Dict[str, Operator] = {
+    'baseline_asls': baseline_asls,
+    'snv': snv,
+    'sg': sg,
+    'deriv': deriv,
+    'area_norm': area_norm,
     'rolling_min': rolling_min,
-    'snv': lambda y: snv(y),
-    'area_norm': lambda y: area_norm(y),
-    'savgol': lambda y, win=7, poly=2: savgol_filter(y, win, poly),
-    'moving_avg': lambda y, n=3: moving_avg(y, n),
+    'peak_align': peak_align,
 }
 
 
-def apply_pipeline(lam: np.ndarray, y: np.ndarray, config: Iterable[Dict]) -> np.ndarray:
-    """Apply a sequence of preprocessing steps described by ``config``.
+def apply_pipeline(lam: np.ndarray, y: np.ndarray,
+                   spec: Iterable[Dict | Tuple[str, Dict] | str]) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """Apply a sequence of preprocessing steps.
 
-    Each element in ``config`` is a mapping with key ``op`` specifying
-    the operator name and optional keyword arguments.
+    Parameters
+    ----------
+    lam, y:
+        Input wavelength axis and spectrum.
+    spec:
+        Sequence of operations. Each element may be a string, a
+        ``(op, params)`` tuple or a mapping containing ``op`` and
+        keyword arguments.
+
+    Returns
+    -------
+    lam2, y2, info:
+        Processed axis and spectrum together with a list of applied
+        operator names.
     """
-    y_hat = np.asarray(y, dtype=float)
-    for step in config:
-        op = step['op']
+    lam2 = np.asarray(lam, dtype=float)
+    y2 = np.asarray(y, dtype=float)
+    info: List[str] = []
+    for step in spec:
+        if isinstance(step, str):
+            op, params = step, {}
+        elif isinstance(step, tuple):
+            op, params = step
+        elif isinstance(step, dict):
+            op = step.get('op')
+            params = {k: v for k, v in step.items() if k != 'op'}
+        else:  # pragma: no cover - defensive
+            raise TypeError('Invalid pipeline step')
         func = _OPERATORS.get(op)
         if func is None:
             raise ValueError(f'Unknown operator {op}')
-        kwargs = {k: v for k, v in step.items() if k != 'op'}
-        y_hat = func(y_hat, **kwargs)
-    return y_hat
+        lam2, y2 = func(lam2, y2, **params)
+        info.append(op)
+    return lam2, y2, info
+

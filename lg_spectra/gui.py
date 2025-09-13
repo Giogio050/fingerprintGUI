@@ -131,15 +131,15 @@ class MainWindow(QtWidgets.QMainWindow):
         base = items[0].text()
         lam, spec, _ = self.loaded_spectra[base]
         y = spec[0] if spec.ndim > 1 else spec
-        y_hat = apply_pipeline(lam, y, [{'op': 'snv'}, {'op': 'savgol', 'win': 7, 'poly': 2}])
+        lam2, y_hat, _ = apply_pipeline(lam, y, [{'op': 'snv'}, {'op': 'sg', 'window': 7, 'poly': 2}])
         self.spectra_plot.clear()
-        self.spectra_plot.plot(lam, y, pen='r')
-        self.spectra_plot.plot(lam, y_hat, pen='g')
-        sticks = pick_sticks(lam, y_hat, {'k': 6})
+        self.spectra_plot.plot(lam2, y, pen='r')
+        self.spectra_plot.plot(lam2, y_hat, pen='g')
+        sticks = pick_sticks(lam2, y_hat, {'k': 6})
         self.ms_plot.clear()
         for s in sticks:
-            self.ms_plot.plot([s.lambda_nm, s.lambda_nm], [0, s.rel_intensity], pen='b')
-        fp = compute_features(lam, y_hat, sticks)
+            self.ms_plot.plot([s.lambda_nm, s.lambda_nm], [0, s.intensity], pen='b')
+        fp = compute_features(lam2, y_hat, sticks)
         self.current_fp = fp
         self.feature_table.setColumnCount(2)
         self.feature_table.setRowCount(len(fp['bandpower']))

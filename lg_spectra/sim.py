@@ -1,4 +1,5 @@
 """Selected ion monitoring style traces from spectral data."""
+
 from __future__ import annotations
 
 from typing import Dict, Sequence

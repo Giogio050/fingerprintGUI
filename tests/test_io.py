@@ -10,10 +10,10 @@ def test_save_and_load_spec_npz(tmp_path: Path) -> None:
     inten = np.random.rand(5)
     out = tmp_path / "test.npz"
     save_spec(out, lam, intensity=inten, source="unit")
-    data = load_any(out)
-    assert np.allclose(data["wavelength"], lam)
-    assert np.allclose(data["intensity"], inten)
-    assert data["meta"]["filename"] == "test.npz"
+    wl, spec, meta = load_any(out)
+    assert np.allclose(wl, lam)
+    assert np.allclose(spec, inten)
+    assert meta["filename"] == "test.npz"
 
 
 def test_load_folder_with_various_files(tmp_path: Path) -> None:

@@ -2,58 +2,136 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from dataclasses import asdict
+from typing import Dict, Iterable, List, Sequence
+
 import numpy as np
-from scipy.stats import entropy, skew, kurtosis
 from scipy.fft import dct
+from scipy.stats import entropy, kurtosis, skew
 
 from .sticks import Stick
+from .vectorize import sticks_to_vector
 
 
-BANDS = [(360, 400), (400, 450), (450, 500), (500, 600), (600, 700), (700, 800)]
+BANDS: Sequence[tuple[float, float]] = (
+    (360, 400),
+    (400, 450),
+    (450, 500),
+    (500, 600),
+    (600, 700),
+    (700, 800),
+)
+
+
+def _safe_norm(y: np.ndarray) -> np.ndarray:
+    y = np.asarray(y, dtype=float)
+    y -= y.min()
+    max_v = y.max()
+    return y / max_v if max_v else y
 
 
 def _bandpower(lam: np.ndarray, y: np.ndarray) -> List[float]:
-    powers = []
+    lam = np.asarray(lam)
+    y = np.asarray(y)
+    totals: List[float] = []
     for lo, hi in BANDS:
         mask = (lam >= lo) & (lam < hi)
         if mask.any():
-            powers.append(float(np.trapz(y[mask], lam[mask])))
+            totals.append(float(np.trapezoid(y[mask], lam[mask])))
         else:
-            powers.append(0.0)
-    total = sum(powers) or 1.0
-    return [p / total for p in powers]
+            totals.append(0.0)
+    total = sum(totals) or 1.0
+    return [p / total for p in totals]
 
 
-def _phash(y: np.ndarray) -> str:
-    small = np.interp(np.linspace(0, len(y) - 1, 32), np.arange(len(y)), y)
-    coeffs = dct(small, norm="ortho")[:16]
-    med = np.median(coeffs[1:])
-    bits = "".join("1" if c > med else "0" for c in coeffs[1:])
-    return "phash_v1:" + hex(int(bits, 2))[2:]
+def _peak_complexity(lam: np.ndarray, sticks: Sequence[Stick]) -> Dict[str, float]:
+    counts = []
+    for lo, hi in BANDS:
+        counts.append(sum(1 for s in sticks if lo <= s.lambda_nm < hi))
+    total = sum(counts) or 1
+    return {
+        "per_band": counts,
+        "density": total / (BANDS[-1][1] - BANDS[0][0]),
+    }
 
 
-def compute_features(lam: np.ndarray, y: np.ndarray, sticks: List[Stick]) -> Dict:
-    """Compute fingerprint features from processed spectrum and its sticks."""
-    rel = np.array([s.rel_intensity for s in sticks])
-    ratios = (rel[1:] / rel[0]) if len(rel) > 1 else np.array([])
-    y_norm = y / np.max(y) if np.max(y) else y
-    feats = {
-        "sticks": [s.__dict__ for s in sticks],
-        "ratios": ratios.tolist(),
-        "entropy": float(entropy(np.abs(y_norm) + 1e-12)),
+def _phash(vector: np.ndarray) -> str:
+    coarse = np.interp(np.linspace(0, vector.size - 1, 32), np.arange(vector.size), vector)
+    coeffs = dct(coarse, norm="ortho")[:16]
+    median = np.median(coeffs[1:])
+    bits = "".join("1" if c > median else "0" for c in coeffs[1:])
+    return "phash_v1:" + format(int(bits, 2), "016x")
+
+
+def _ratios(sticks: Sequence[Stick]) -> List[float]:
+    if len(sticks) < 2:
+        return []
+    intensities = np.array([s.rel_intensity for s in sticks], dtype=float)
+    intensities = intensities / intensities.max() if intensities.max() else intensities
+    base = intensities[0]
+    if base == 0:
+        return []
+    return (intensities[1:] / base).tolist()
+
+
+def _global_stats(lam: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+    weights = y / (y.sum() + 1e-9)
+    lambda_mean = float(np.average(lam, weights=weights))
+    lambda_median = float(np.interp(0.5, np.cumsum(weights), lam, left=float(lam[0]), right=float(lam[-1])))
+    return {
+        "lambda_mean": lambda_mean,
+        "lambda_median": lambda_median,
+        "skew": float(skew(y)),
+        "kurt": float(kurtosis(y)),
+        "lambda_std": float(np.sqrt(np.average((lam - lambda_mean) ** 2, weights=weights))),
+    }
+
+
+def compute_features(
+    lam: np.ndarray,
+    y: np.ndarray,
+    sticks: Sequence[Stick],
+    *,
+    meta: Dict[str, object] | None = None,
+    rt_min: float | None = None,
+) -> Dict[str, object]:
+    """Compute the fingerprint feature dictionary."""
+
+    lam = np.asarray(lam, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if y.ndim != 1:
+        y = np.asarray(y).reshape(-1)
+    y_norm = _safe_norm(y)
+
+    vector = sticks_to_vector(list(sticks))
+    ratios = _ratios(sticks)
+    dct16 = dct(y_norm, norm="ortho")[:16]
+
+    rel = np.array([s.rel_intensity for s in sticks]) if sticks else np.array([])
+    purity = float(rel.max() / (rel.sum() + 1e-9)) if rel.size else 0.0
+    snr = float(rel.max() / (np.std(y_norm) + 1e-9)) if rel.size else 0.0
+
+    features: Dict[str, object] = {
+        "unit": "nm",
+        "sticks": [asdict(s) for s in sticks],
+        "ratios": ratios,
+        "entropy": float(entropy(y_norm + 1e-12)),
         "bandpower": _bandpower(lam, y_norm),
-        "dct16": dct(y_norm, norm="ortho")[:16].tolist(),
+        "dct16": dct16.tolist(),
         "hash": _phash(y_norm),
-        "global": {
-            "lambda_mean": float(np.average(lam, weights=y_norm)),
-            "skew": float(skew(y_norm)),
-            "kurt": float(kurtosis(y_norm)),
-        },
+        "global": _global_stats(lam, y_norm),
         "quality": {
-            "snr": float(np.max(rel) / (np.std(y_norm) + 1e-9)),
-            "purity": float(np.max(rel) / (np.sum(rel) + 1e-9)),
+            "snr": snr,
+            "purity": purity,
             "n_sticks": int(len(sticks)),
         },
+        "peak_complexity": _peak_complexity(lam, sticks),
+        "stick_vector": vector.tolist(),
     }
-    return feats
+    if rt_min is not None:
+        features["rt_min"] = float(rt_min)
+    if meta is not None:
+        features["meta"] = dict(meta)
+    if rel.size >= 1:
+        features["top_lambda"] = float(sticks[0].lambda_nm)
+    return features

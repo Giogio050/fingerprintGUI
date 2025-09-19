@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Dict, Sequence
+
 import numpy as np
 
 
@@ -11,24 +12,24 @@ def sim_traces(
     frames: np.ndarray,
     target_lambdas: Sequence[float],
     band: int = 2,
-) -> Dict[str, np.ndarray]:
+) -> Dict[str, Sequence[float]]:
     """Extract narrow-band traces around ``target_lambdas``.
 
-    Parameters
-    ----------
-    lam:
-        Wavelength axis.
-    frames:
-        2-D array (time x wavelength) of spectra.
-    target_lambdas:
-        Iterable of central wavelengths to integrate around.
-    band:
-        Half width of the band in nm.
+    Returns a dictionary with the synthetic chromatogram for each target
+    wavelength and a ``time`` axis representing the frame indices.
     """
-    traces: Dict[str, np.ndarray] = {}
-    for tlam in target_lambdas:
+
+    lam = np.asarray(lam, dtype=float)
+    frames = np.asarray(frames, dtype=float)
+    if frames.ndim != 2:
+        raise ValueError("frames must be a 2-D array")
+
+    time_axis = np.arange(frames.shape[0], dtype=float)
+    traces: Dict[str, Sequence[float]] = {"time": time_axis.tolist()}
+    for tlam in sorted(set(round(float(x), 3) for x in target_lambdas)):
         mask = (lam >= tlam - band) & (lam <= tlam + band)
         if not mask.any():
             continue
-        traces[f"{tlam:.1f}"] = frames[:, mask].mean(axis=1)
+        trace = frames[:, mask].mean(axis=1)
+        traces[f"{tlam:.3f}"] = trace.tolist()
     return traces
